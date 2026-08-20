@@ -1,0 +1,20 @@
+{
+  "name": "d1-server",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "start": "wrangler dev",
+    "test": "vitest"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.12.4",
+    "vitest": "~3.2.0",
+    "wrangler": "^4.117.0"
+  },
+  "dependencies": {
+    "hono": "^4.12.27",
+    "resend": "^6.17.2"
+  }
+}
