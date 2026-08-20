@@ -1,282 +1,274 @@
 const corsHeaders = {
-  "Access-Control-Allow-Origin": "https://idexcy.com",
-  "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization",
+	'Access-Control-Allow-Origin': 'https://idexcy.com',
+	'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+	'Access-Control-Allow-Headers': 'Content-Type, Authorization',
 };
 
-
 export async function verifyEmail(request, env) {
-  try {
-    const { email, code } = await request.json();
+	try {
+		const { email, code } = await request.json();
 
-    if (!email || !code) {
-      return Response.json(
-        {
-          success: false,
-          message: "Email and verification code are required."
-        },
-        { status: 400 }
-      );
-    }
+		if (!email || !code) {
+			return Response.json(
+				{
+					success: false,
+					message: 'Email and verification code are required.',
+				},
+				{ status: 400 },
+			);
+		}
 
-    // Find verification record
-    const verification = await env.d1_server.prepare(`
+		// Find verification record
+		const verification = await env.d1_server
+			.prepare(
+				`
             SELECT *
             FROM email_verifications
             WHERE email = ?
             AND code = ?
-        `)
-      .bind(email, code)
-      .first();
+        `,
+			)
+			.bind(email, code)
+			.first();
 
-    if (!verification) {
-      return Response.json(
-        {
-          success: false,
-          message: "Invalid verification code."
-        },
-        { status: 400 }
-      );
-    }
+		if (!verification) {
+			return Response.json(
+				{
+					success: false,
+					message: 'Invalid verification code.',
+				},
+				{ status: 400 },
+			);
+		}
 
-    // Check expiry
-    if (new Date(verification.expires_at) < new Date()) {
-
-      // Remove expired code
-      await env.DB.prepare(`
+		// Check expiry
+		if (new Date(verification.expires_at) < new Date()) {
+			// Remove expired code
+			await env.DB.prepare(
+				`
                 DELETE FROM email_verifications
                 WHERE id = ?
-            `)
-        .bind(verification.id)
-        .run();
+            `,
+			)
+				.bind(verification.id)
+				.run();
 
-      return Response.json(
-        {
-          success: false,
-          message: "Verification code has expired."
-        },
-        { status: 400 }
-      );
-    }
+			return Response.json(
+				{
+					success: false,
+					message: 'Verification code has expired.',
+				},
+				{ status: 400 },
+			);
+		}
 
-    // Mark email as verified
-    await env.d1_server.prepare(`
+		// Mark email as verified
+		await env.d1_server
+			.prepare(
+				`
             UPDATE users
             SET email_verified = 1
             WHERE id = ?
-        `)
-      .bind(verification.user_id)
-      .run();
+        `,
+			)
+			.bind(verification.user_id)
+			.run();
 
-    // Delete OTP
-    await env.d1_server.prepare(`
+		// Delete OTP
+		await env.d1_server
+			.prepare(
+				`
             DELETE FROM email_verifications
             WHERE user_id = ?
-        `)
-      .bind(verification.user_id)
-      .run();
+        `,
+			)
+			.bind(verification.user_id)
+			.run();
 
-    return Response.json({
-      success: true,
-      message: "Email verified successfully."
-    });
+		return Response.json({
+			success: true,
+			message: 'Email verified successfully.',
+		});
+	} catch (err) {
+		console.error(err);
 
-  } catch (err) {
-    console.error(err);
-
-    return Response.json(
-      {
-        success: false,
-        message: "Internal server error."
-      },
-      { status: 500 }
-    );
-  }
+		return Response.json(
+			{
+				success: false,
+				message: 'Internal server error.',
+			},
+			{ status: 500 },
+		);
+	}
 }
 export default {
+	async fetch(request, env) {
+		if (request.method === 'OPTIONS') {
+			return new Response(null, {
+				status: 204,
+				headers: corsHeaders,
+			});
+		}
 
-  async fetch(request, env) {
-    if (request.method === "OPTIONS") {
-      return new Response(null, {
-        status: 204,
-        headers: corsHeaders,
-      });
-    }
+		const url = new URL(request.url);
 
-    const url = new URL(request.url);
+		if (url.pathname === '/api/verify-email' && request.method === 'POST') {
+			return verifyEmail(request, env);
+		}
 
+		const PBKDF2_ITERATIONS = 100000;
 
-    if (url.pathname === "/api/verify-email" && request.method === "POST") {
-      return verifyEmail(request, env);
-    }
+		function bytesToBase64(bytes) {
+			let binary = '';
+			for (const byte of bytes) binary += String.fromCharCode(byte);
+			return btoa(binary);
+		}
 
-    const PBKDF2_ITERATIONS = 100000;
+		function base64ToBytes(value) {
+			const binary = atob(value);
+			return Uint8Array.from(binary, (char) => char.charCodeAt(0));
+		}
 
-    function bytesToBase64(bytes) {
-      let binary = "";
-      for (const byte of bytes) binary += String.fromCharCode(byte);
-      return btoa(binary);
-    }
+		async function hashPassword(password) {
+			const salt = crypto.getRandomValues(new Uint8Array(16));
 
-    function base64ToBytes(value) {
-      const binary = atob(value);
-      return Uint8Array.from(binary, char => char.charCodeAt(0));
-    }
+			const keyMaterial = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']);
 
-    async function hashPassword(password) {
-      const salt = crypto.getRandomValues(new Uint8Array(16));
+			const derivedBits = await crypto.subtle.deriveBits(
+				{
+					name: 'PBKDF2',
+					salt,
+					iterations: PBKDF2_ITERATIONS,
+					hash: 'SHA-256',
+				},
+				keyMaterial,
+				256,
+			);
 
-      const keyMaterial = await crypto.subtle.importKey(
-        "raw",
-        new TextEncoder().encode(password),
-        "PBKDF2",
-        false,
-        ["deriveBits"]
-      );
+			return `pbkdf2$${PBKDF2_ITERATIONS}$${bytesToBase64(salt)}$${bytesToBase64(new Uint8Array(derivedBits))}`;
+		}
 
-      const derivedBits = await crypto.subtle.deriveBits(
-        {
-          name: "PBKDF2",
-          salt,
-          iterations: PBKDF2_ITERATIONS,
-          hash: "SHA-256"
-        },
-        keyMaterial,
-        256
-      );
+		async function verifyPassword(password, storedHash) {
+			if (!storedHash?.startsWith('pbkdf2$')) {
+				return false;
+			}
 
-      return `pbkdf2$${PBKDF2_ITERATIONS}$${bytesToBase64(salt)}$${bytesToBase64(
-        new Uint8Array(derivedBits)
-      )}`;
-    }
+			const [, iterations, saltBase64, hashBase64] = storedHash.split('$');
 
-    async function verifyPassword(password, storedHash) {
-      if (!storedHash?.startsWith("pbkdf2$")) {
-        return false;
-      }
+			const salt = base64ToBytes(saltBase64);
 
-      const [, iterations, saltBase64, hashBase64] = storedHash.split("$");
+			const keyMaterial = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']);
 
-      const salt = base64ToBytes(saltBase64);
+			const derivedBits = await crypto.subtle.deriveBits(
+				{
+					name: 'PBKDF2',
+					salt,
+					iterations: Number(iterations),
+					hash: 'SHA-256',
+				},
+				keyMaterial,
+				256,
+			);
 
-      const keyMaterial = await crypto.subtle.importKey(
-        "raw",
-        new TextEncoder().encode(password),
-        "PBKDF2",
-        false,
-        ["deriveBits"]
-      );
+			const derived = new Uint8Array(derivedBits);
+			const expected = base64ToBytes(hashBase64);
 
-      const derivedBits = await crypto.subtle.deriveBits(
-        {
-          name: "PBKDF2",
-          salt,
-          iterations: Number(iterations),
-          hash: "SHA-256"
-        },
-        keyMaterial,
-        256
-      );
+			if (derived.length !== expected.length) return false;
 
-      const derived = new Uint8Array(derivedBits);
-      const expected = base64ToBytes(hashBase64);
+			let difference = 0;
 
-      if (derived.length !== expected.length) return false;
+			for (let i = 0; i < derived.length; i++) {
+				difference |= derived[i] ^ expected[i];
+			}
 
-      let difference = 0;
+			return difference === 0;
+		}
 
-      for (let i = 0; i < derived.length; i++) {
-        difference |= derived[i] ^ expected[i];
-      }
+		if (request.method === 'POST' && url.pathname === '/api/register') {
+			try {
+				const { name, email, password } = await request.json();
 
-      return difference === 0;
-    }
+				// Validate input
+				if (!name || !email || !password) {
+					return Response.json(
+						{
+							success: false,
+							message: 'Name, email and password are required.',
+						},
+						{
+							status: 400,
+							headers: corsHeaders,
+						},
+					);
+				}
 
+				// TODO: Replace with a proper password hash
+				// const passwordHash = password;
+				const passwordHash = await hashPassword(password);
+				// Check if user already exists
+				const existingUser = await env.d1_server.prepare('SELECT id FROM users WHERE email = ?').bind(email).first();
 
-    if (request.method === "POST" && url.pathname === "/api/register") {
-      try {
-        const { name, email, password } = await request.json();
+				if (existingUser) {
+					return Response.json(
+						{
+							success: false,
+							message: 'Email is already registered.',
+						},
+						{
+							status: 409,
+							headers: corsHeaders,
+						},
+					);
+				}
 
-        // Validate input
-        if (!name || !email || !password) {
-          return Response.json(
-            {
-              success: false,
-              message: "Name, email and password are required."
-            },
-            {
-              status: 400,
-              headers: corsHeaders
-            }
-          );
-        }
-
-        // TODO: Replace with a proper password hash
-        // const passwordHash = password;
-        const passwordHash = await hashPassword(password);
-        // Check if user already exists
-        const existingUser = await env.d1_server
-          .prepare("SELECT id FROM users WHERE email = ?")
-          .bind(email)
-          .first();
-
-        if (existingUser) {
-          return Response.json(
-            {
-              success: false,
-              message: "Email is already registered."
-            },
-            {
-              status: 409,
-              headers: corsHeaders
-            }
-          );
-        }
-
-        // Insert user
-        const insertUser = await env.d1_server
-          .prepare(`
+				// Insert user
+				const insertUser = await env.d1_server
+					.prepare(
+						`
         INSERT INTO users (name, email, password_hash)
         VALUES (?, ?, ?)
-      `)
-          .bind(name, email, passwordHash)
-          .run();
+      `,
+					)
+					.bind(name, email, passwordHash)
+					.run();
 
-        const userId = insertUser.meta.last_row_id;
+				const userId = insertUser.meta.last_row_id;
 
-        // Generate 6-digit OTP
-        const code = Math.floor(100000 + Math.random() * 900000).toString();
+				// Generate 6-digit OTP
+				const code = Math.floor(100000 + Math.random() * 900000).toString();
 
-        // Expiry = 10 minutes
-        const expires = new Date(
-          Date.now() + 10 * 60 * 1000
-        ).toISOString();
+				// Expiry = 10 minutes
+				const expires = new Date(Date.now() + 10 * 60 * 1000).toISOString();
 
-        // Delete old OTPs (just in case)
-        await env.d1_server
-          .prepare(`
+				// Delete old OTPs (just in case)
+				await env.d1_server
+					.prepare(
+						`
         DELETE FROM email_verifications
         WHERE email = ?
-      `)
-          .bind(email)
-          .run();
+      `,
+					)
+					.bind(email)
+					.run();
 
-        // Save OTP
-        await env.d1_server
-          .prepare(`
+				// Save OTP
+				await env.d1_server
+					.prepare(
+						`
         INSERT INTO email_verifications
         (user_id, email, code, expires_at)
         VALUES (?, ?, ?, ?)
-      `)
-          .bind(userId, email, code, expires)
-          .run();
+      `,
+					)
+					.bind(userId, email, code, expires)
+					.run();
 
-        // Send Email
-        const payload = {
-          from: "Idexcy <orders@idexcy.com>",
-          to: [email],
-          subject: "Verify your Email",
-          html: `
+				// Send Email
+				const payload = {
+					from: 'Idexcy <orders@idexcy.com>',
+					to: [email],
+					subject: 'Verify your Email',
+					html: `
         <div style="font-family:Arial,sans-serif">
           <h2>Welcome to Idexcy</h2>
 
@@ -292,171 +284,146 @@ export default {
 
           <p>If you didn't create this account, you can safely ignore this email.</p>
         </div>
-      `
-        };
+      `,
+				};
 
-        const resendResponse = await fetch(
-          "https://api.resend.com/emails",
-          {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${env.RESEND_API_KEY}`,
-              "Content-Type": "application/json"
-            },
-            body: JSON.stringify(payload)
-          }
-        );
+				const resendResponse = await fetch('https://api.resend.com/emails', {
+					method: 'POST',
+					headers: {
+						Authorization: `Bearer ${env.RESEND_API_KEY}`,
+						'Content-Type': 'application/json',
+					},
+					body: JSON.stringify(payload),
+				});
 
-        if (!resendResponse.ok) {
-          console.error(await resendResponse.text());
+				if (!resendResponse.ok) {
+					console.error(await resendResponse.text());
 
-          return Response.json(
-            {
-              success: false,
-              message: "Failed to send verification email."
-            },
-            {
-              status: 500,
-              headers: corsHeaders
-            }
-          );
-        }
+					return Response.json(
+						{
+							success: false,
+							message: 'Failed to send verification email.',
+						},
+						{
+							status: 500,
+							headers: corsHeaders,
+						},
+					);
+				}
 
-        return Response.json(
-          {
-            success: true,
-            message: "Registration successful. Please verify your email.",
-            requiresVerification: true
-          },
-          {
-            headers: corsHeaders
-          }
-        );
+				return Response.json(
+					{
+						success: true,
+						message: 'Registration successful. Please verify your email.',
+						requiresVerification: true,
+					},
+					{
+						headers: corsHeaders,
+					},
+				);
+			} catch (err) {
+				console.error(err);
 
-      } catch (err) {
-        console.error(err);
+				return Response.json(
+					{
+						success: false,
+						message: err.message,
+					},
+					{
+						status: 500,
+						headers: corsHeaders,
+					},
+				);
+			}
+		}
 
-        return Response.json(
-          {
-            success: false,
-            message: err.message
-          },
-          {
-            status: 500,
-            headers: corsHeaders
-          }
-        );
-      }
-    }
+		if (request.method === 'POST' && url.pathname === '/api/login') {
+			const { email, password } = await request.json();
 
+			const user = await env.d1_server
+				.prepare('SELECT id, name, email,  is_admin,  password_hash FROM users WHERE email = ?')
+				.bind(email)
+				.first();
 
+			if (!user) {
+				return Response.json(
+					{
+						success: false,
+						message: 'Invalid email or password',
+					},
+					{
+						status: 401,
+						headers: corsHeaders,
+					},
+				);
+			}
+			const passwordValid = await verifyPassword(password, user.password_hash);
 
+			if (!passwordValid) {
+				return Response.json(
+					{
+						success: false,
+						message: 'Invalid email or password',
+					},
+					{ status: 401, headers: corsHeaders },
+				);
+			}
 
+			return Response.json(
+				{
+					success: true,
+					user: {
+						id: user.id,
+						name: user.name,
+						email: user.email,
+						is_admin: user.is_admin,
+					},
+				},
+				{
+					headers: corsHeaders,
+				},
+			);
+		}
 
+		if (request.method === 'POST' && url.pathname === '/api/orders') {
+			try {
+				const { userId, razorpay, customer, shipping, items } = await request.json();
 
+				if (!userId || !items || items.length === 0) {
+					return Response.json(
+						{
+							success: false,
+							message: 'Invalid order data',
+						},
+						{
+							status: 400,
+							headers: corsHeaders,
+						},
+					);
+				}
 
-    if (request.method === "POST" && url.pathname === "/api/login") {
-      const { email, password } = await request.json();
+				let total = 0;
+				let itemsHtml = '';
 
-      const user = await env.d1_server
-        .prepare(
-          "SELECT id, name, email,  is_admin,  password_hash FROM users WHERE email = ?"
-        )
-        .bind(email)
-        .first();
+				for (const item of items) {
+					const product = await env.d1_server.prepare('SELECT * FROM products WHERE id = ?').bind(item.productId).first();
 
-      if (!user) {
-        return Response.json(
-          {
-            success: false,
-            message: "Invalid email or password",
-          },
-          {
-            status: 401,
-            headers: corsHeaders,
+					if (!product) {
+						return Response.json(
+							{
+								success: false,
+								message: `Product ${item.productId} not found`,
+							},
+							{
+								status: 404,
+								headers: corsHeaders,
+							},
+						);
+					}
 
-          }
-        );
-      }
-      const passwordValid = await verifyPassword(
-        password,
-        user.password_hash
-      );
+					total += product.price * item.quantity;
 
-      if (!passwordValid) {
-
-        return Response.json(
-          {
-            success: false,
-            message: "Invalid email or password",
-          },
-          { status: 401, headers: corsHeaders, },
-
-        );
-      }
-
-      return Response.json({
-        success: true,
-        user: {
-          id: user.id,
-          name: user.name,
-          email: user.email,
-          is_admin: user.is_admin
-        },
-      }, {
-        headers: corsHeaders,
-      });
-    }
-
-    if (request.method === "POST" && url.pathname === "/api/orders") {
-      try {
-        const {
-          userId,
-          razorpay,
-          customer,
-          shipping,
-          items
-        } = await request.json();
-
-        if (!userId || !items || items.length === 0) {
-          return Response.json(
-            {
-              success: false,
-              message: "Invalid order data"
-            },
-            {
-              status: 400,
-              headers: corsHeaders
-            }
-          );
-        }
-
-
-        let total = 0;
-        let itemsHtml = "";
-
-        for (const item of items) {
-          const product = await env.d1_server
-            .prepare("SELECT * FROM products WHERE id = ?")
-            .bind(item.productId)
-            .first();
-
-          if (!product) {
-            return Response.json(
-              {
-                success: false,
-                message: `Product ${item.productId} not found`
-              },
-              {
-                status: 404,
-                headers: corsHeaders
-              }
-            );
-          }
-
-          total += product.price * item.quantity;
-
-          itemsHtml += `
+					itemsHtml += `
     <tr>
       <td style="padding:8px;border:1px solid #ddd;">${product.name}</td>
       <td style="padding:8px;border:1px solid #ddd;text-align:center;">${item.quantity}</td>
@@ -465,13 +432,12 @@ export default {
       </td>
     </tr>
   `;
-        }
+				}
 
-
-
-        // Create Order
-        const orderResult = await env.d1_server
-          .prepare(`
+				// Create Order
+				const orderResult = await env.d1_server
+					.prepare(
+						`
     INSERT INTO orders (
       user_id,
       razorpay_order_id,
@@ -489,36 +455,35 @@ export default {
       order_status
     )
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `)
-          .bind(
-            userId,
-            razorpay.razorpay_order_id,
-            razorpay.razorpay_payment_id,
-            razorpay.razorpay_signature,
-            total,
-            customer.name,
-            customer.email,
-            customer.phone,
-            shipping.address,
-            shipping.city,
-            shipping.state,
-            shipping.pincode,
-            "Paid",
-            "Pending"
-          )
-          .run();
+  `,
+					)
+					.bind(
+						userId,
+						razorpay.razorpay_order_id,
+						razorpay.razorpay_payment_id,
+						razorpay.razorpay_signature,
+						total,
+						customer.name,
+						customer.email,
+						customer.phone,
+						shipping.address,
+						shipping.city,
+						shipping.state,
+						shipping.pincode,
+						'Paid',
+						'Pending',
+					)
+					.run();
 
-        const orderId = orderResult.meta.last_row_id;
+				const orderId = orderResult.meta.last_row_id;
 
-        // Save order items
-        for (const item of items) {
-          const product = await env.d1_server
-            .prepare("SELECT * FROM products WHERE id = ?")
-            .bind(item.productId)
-            .first();
+				// Save order items
+				for (const item of items) {
+					const product = await env.d1_server.prepare('SELECT * FROM products WHERE id = ?').bind(item.productId).first();
 
-          await env.d1_server
-            .prepare(`
+					await env.d1_server
+						.prepare(
+							`
                 INSERT INTO order_items (
                   order_id,
                   product_id,
@@ -527,24 +492,18 @@ export default {
                   price
                 )
                 VALUES (?, ?, ?, ?, ?)
-              `)
-            .bind(
-              orderId,
-              product.id,
-              product.name,
-              item.quantity,
-              product.price
-            )
-            .run();
-        }
+              `,
+						)
+						.bind(orderId, product.id, product.name, item.quantity, product.price)
+						.run();
+				}
 
-
-        const payload = {
-          from: "Idexcy <orders@idexcy.com>",
-          to: [customer.email],
-          cc: ["idexcy.com@gmail.com"],
-          subject: `Your Idexcy Order #${orderId} is Confirmed 🍫`,
-          html: `
+				const payload = {
+					from: 'Idexcy <orders@idexcy.com>',
+					to: [customer.email],
+					cc: ['idexcy.com@gmail.com'],
+					subject: `Your Idexcy Order #${orderId} is Confirmed 🍫`,
+					html: `
 <!DOCTYPE html>
 <html>
 <head>
@@ -712,135 +671,117 @@ Questions? Just reply to this email.
 
 </body>
 </html>
-`
-        };
+`,
+				};
 
-        const emailResponse = await fetch("https://api.resend.com/emails", {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${env.RESEND_API_KEY}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(payload),
-        });
+				const emailResponse = await fetch('https://api.resend.com/emails', {
+					method: 'POST',
+					headers: {
+						Authorization: `Bearer ${env.RESEND_API_KEY}`,
+						'Content-Type': 'application/json',
+					},
+					body: JSON.stringify(payload),
+				});
 
-        const emailText = await emailResponse.text();
+				const emailText = await emailResponse.text();
 
-        return Response.json({
-          customerEmail: customer.email,
-          payload,
-          resendStatus: emailResponse.status,
-          resendResponse: emailText
-        });
-        return Response.json(
-          {
-            success: true,
-            orderId,
-            total,
-            message: "Order placed successfully"
-          },
-          {
-            headers: corsHeaders
-          }
-        );
+				return Response.json({
+					customerEmail: customer.email,
+					payload,
+					resendStatus: emailResponse.status,
+					resendResponse: emailText,
+				});
+				return Response.json(
+					{
+						success: true,
+						orderId,
+						total,
+						message: 'Order placed successfully',
+					},
+					{
+						headers: corsHeaders,
+					},
+				);
+			} catch (err) {
+				return Response.json(
+					{
+						success: false,
+						error: err.message,
+					},
+					{
+						status: 500,
+						headers: corsHeaders,
+					},
+				);
+			}
+		}
 
-      } catch (err) {
+		if (request.method === 'POST' && url.pathname === '/api/admin/products') {
+			try {
+				const { name, description, price, stock, image, category } = await request.json();
 
-        return Response.json(
-          {
-            success: false,
-            error: err.message
-          },
-          {
-            status: 500,
-            headers: corsHeaders
-          }
-        );
+				// Validation
+				if (!name || price == null) {
+					return Response.json(
+						{
+							success: false,
+							message: 'Name and price are required',
+						},
+						{
+							status: 400,
+							headers: corsHeaders,
+						},
+					);
+				}
 
-      }
-    }
-
-    if (request.method === "POST" && url.pathname === "/api/admin/products") {
-      try {
-        const {
-          name,
-          description,
-          price,
-          stock,
-          image,
-          category
-        } = await request.json();
-
-        // Validation
-        if (!name || price == null) {
-          return Response.json(
-            {
-              success: false,
-              message: "Name and price are required"
-            },
-            {
-              status: 400,
-              headers: corsHeaders
-            }
-          );
-        }
-
-        const result = await env.d1_server
-          .prepare(`
+				const result = await env.d1_server
+					.prepare(
+						`
         INSERT INTO products
         (name, description, price, stock, image, category)
         VALUES (?, ?, ?, ?, ?, ?)
-      `)
-          .bind(
-            name,
-            description || "",
-            Number(price),
-            Number(stock || 0),
-            image || "",
-            category || ""
-          )
-          .run();
+      `,
+					)
+					.bind(name, description || '', Number(price), Number(stock || 0), image || '', category || '')
+					.run();
 
-        return Response.json(
-          {
-            success: true,
-            message: "Product added successfully",
-            productId: result.meta.last_row_id
-          },
-          {
-            headers: corsHeaders
-          }
-        );
+				return Response.json(
+					{
+						success: true,
+						message: 'Product added successfully',
+						productId: result.meta.last_row_id,
+					},
+					{
+						headers: corsHeaders,
+					},
+				);
+			} catch (err) {
+				return Response.json(
+					{
+						success: false,
+						error: err.message,
+					},
+					{
+						status: 500,
+						headers: corsHeaders,
+					},
+				);
+			}
+		}
 
-      } catch (err) {
+		if (request.method === 'GET' && url.pathname === '/api/check-resend') {
+			return Response.json({
+				keyExists: !!env.RESEND_API_KEY,
+				keyPrefix: env.RESEND_API_KEY?.substring(0, 8),
+			});
+		}
 
-        return Response.json(
-          {
-            success: false,
-            error: err.message
-          },
-          {
-            status: 500,
-            headers: corsHeaders
-          }
-        );
+		if (request.method === 'GET' && url.pathname === '/api/orders') {
+			const userId = url.searchParams.get('userId');
 
-      }
-    }
-
-    if (request.method === "GET" && url.pathname === "/api/check-resend") {
-      return Response.json({
-        keyExists: !!env.RESEND_API_KEY,
-        keyPrefix: env.RESEND_API_KEY?.substring(0, 8)
-      });
-    }
-
-    if (request.method === "GET" && url.pathname === "/api/orders") {
-
-      const userId = url.searchParams.get("userId");
-
-      const orders = await env.d1_server
-        .prepare(`
+			const orders = await env.d1_server
+				.prepare(
+					`
             SELECT
                 id,
                 amount,
@@ -850,39 +791,30 @@ Questions? Just reply to this email.
             FROM orders
             WHERE user_id = ?
             ORDER BY created_at DESC
-        `)
-        .bind(userId)
-        .all();
+        `,
+				)
+				.bind(userId)
+				.all();
 
-      return Response.json(
-        {
-          success: true,
-          orders: orders.results
-        },
-        {
-          headers: corsHeaders
-        }
-      );
-    }
-    if (
-      request.method === "PUT" &&
-      url.pathname.startsWith("/api/orders/")
-    ) {
-      try {
-        const orderId = url.pathname.split("/").pop();
+			return Response.json(
+				{
+					success: true,
+					orders: orders.results,
+				},
+				{
+					headers: corsHeaders,
+				},
+			);
+		}
+		if (request.method === 'PUT' && url.pathname.startsWith('/api/orders/')) {
+			try {
+				const orderId = url.pathname.split('/').pop();
 
-        const {
-          customer_name,
-          email,
-          phone,
-          address,
-          city,
-          state,
-          pincode
-        } = await request.json();
+				const { customer_name, email, phone, address, city, state, pincode } = await request.json();
 
-        const result = await env.d1_server
-          .prepare(`
+				const result = await env.d1_server
+					.prepare(
+						`
         UPDATE orders
         SET
           customer_name = ?,
@@ -893,149 +825,136 @@ Questions? Just reply to this email.
           state = ?,
           pincode = ?
         WHERE id = ?
-      `)
-          .bind(
-            customer_name,
-            email,
-            phone,
-            address,
-            city,
-            state,
-            pincode,
-            orderId
-          )
-          .run();
+      `,
+					)
+					.bind(customer_name, email, phone, address, city, state, pincode, orderId)
+					.run();
 
-        if (result.meta.changes === 0) {
-          return Response.json(
-            {
-              success: false,
-              message: "Order not found"
-            },
-            {
-              status: 404,
-              headers: corsHeaders
-            }
-          );
-        }
+				if (result.meta.changes === 0) {
+					return Response.json(
+						{
+							success: false,
+							message: 'Order not found',
+						},
+						{
+							status: 404,
+							headers: corsHeaders,
+						},
+					);
+				}
 
-        return Response.json(
-          {
-            success: true,
-            message: "Order updated successfully"
-          },
-          {
-            headers: corsHeaders
-          }
-        );
+				return Response.json(
+					{
+						success: true,
+						message: 'Order updated successfully',
+					},
+					{
+						headers: corsHeaders,
+					},
+				);
+			} catch (err) {
+				return Response.json(
+					{
+						success: false,
+						error: err.message,
+					},
+					{
+						status: 500,
+						headers: corsHeaders,
+					},
+				);
+			}
+		}
 
-      } catch (err) {
+		if (request.method === 'PUT' && url.pathname.startsWith('/api/users/')) {
+			try {
+				const userId = url.pathname.split('/').pop();
 
-        return Response.json(
-          {
-            success: false,
-            error: err.message
-          },
-          {
-            status: 500,
-            headers: corsHeaders
-          }
-        );
+				const { name, email, is_admin } = await request.json();
 
-      }
-    }
+				// Validate required fields
+				if (!name || !email) {
+					return Response.json(
+						{
+							success: false,
+							message: 'Name and email are required',
+						},
+						{
+							status: 400,
+							headers: corsHeaders,
+						},
+					);
+				}
 
-    if (
-      request.method === "PUT" &&
-      url.pathname.startsWith("/api/users/")
-    ) {
-      try {
-        const userId = url.pathname.split("/").pop();
+				// Validate is_admin
+				if (is_admin !== 0 && is_admin !== 1) {
+					return Response.json(
+						{
+							success: false,
+							message: 'is_admin must be 0 or 1',
+						},
+						{
+							status: 400,
+							headers: corsHeaders,
+						},
+					);
+				}
 
-        const {
-          name,
-          email,
-          is_admin
-        } = await request.json();
-
-        // Validate required fields
-        if (!name || !email) {
-          return Response.json(
-            {
-              success: false,
-              message: "Name and email are required"
-            },
-            {
-              status: 400,
-              headers: corsHeaders
-            }
-          );
-        }
-
-        // Validate is_admin
-        if (is_admin !== 0 && is_admin !== 1) {
-          return Response.json(
-            {
-              success: false,
-              message: "is_admin must be 0 or 1"
-            },
-            {
-              status: 400,
-              headers: corsHeaders
-            }
-          );
-        }
-
-        // Check if user exists
-        const existingUser = await env.d1_server
-          .prepare(`
+				// Check if user exists
+				const existingUser = await env.d1_server
+					.prepare(
+						`
         SELECT id
         FROM users
         WHERE id = ?
-      `)
-          .bind(userId)
-          .first();
+      `,
+					)
+					.bind(userId)
+					.first();
 
-        if (!existingUser) {
-          return Response.json(
-            {
-              success: false,
-              message: "User not found"
-            },
-            {
-              status: 404,
-              headers: corsHeaders
-            }
-          );
-        }
+				if (!existingUser) {
+					return Response.json(
+						{
+							success: false,
+							message: 'User not found',
+						},
+						{
+							status: 404,
+							headers: corsHeaders,
+						},
+					);
+				}
 
-        // Check if email is already used by another user
-        const emailUser = await env.d1_server
-          .prepare(`
+				// Check if email is already used by another user
+				const emailUser = await env.d1_server
+					.prepare(
+						`
         SELECT id
         FROM users
         WHERE email = ?
         AND id != ?
-      `)
-          .bind(email, userId)
-          .first();
+      `,
+					)
+					.bind(email, userId)
+					.first();
 
-        if (emailUser) {
-          return Response.json(
-            {
-              success: false,
-              message: "Email is already being used by another user"
-            },
-            {
-              status: 409,
-              headers: corsHeaders
-            }
-          );
-        }
+				if (emailUser) {
+					return Response.json(
+						{
+							success: false,
+							message: 'Email is already being used by another user',
+						},
+						{
+							status: 409,
+							headers: corsHeaders,
+						},
+					);
+				}
 
-        // Update user
-        await env.d1_server
-          .prepare(`
+				// Update user
+				await env.d1_server
+					.prepare(
+						`
         UPDATE users
         SET
           name = ?,
@@ -1043,55 +962,47 @@ Questions? Just reply to this email.
           is_admin = ?,
           updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
-      `)
-          .bind(
-            name,
-            email,
-            is_admin,
-            userId
-          )
-          .run();
+      `,
+					)
+					.bind(name, email, is_admin, userId)
+					.run();
 
-        return Response.json(
-          {
-            success: true,
-            message: "User updated successfully",
-            user: {
-              id: userId,
-              name,
-              email,
-              is_admin
-            }
-          },
-          {
-            headers: corsHeaders
-          }
-        );
+				return Response.json(
+					{
+						success: true,
+						message: 'User updated successfully',
+						user: {
+							id: userId,
+							name,
+							email,
+							is_admin,
+						},
+					},
+					{
+						headers: corsHeaders,
+					},
+				);
+			} catch (err) {
+				console.error('Update user error:', err);
 
-      } catch (err) {
+				return Response.json(
+					{
+						success: false,
+						error: err.message,
+					},
+					{
+						status: 500,
+						headers: corsHeaders,
+					},
+				);
+			}
+		}
 
-        console.error("Update user error:", err);
-
-        return Response.json(
-          {
-            success: false,
-            error: err.message
-          },
-          {
-            status: 500,
-            headers: corsHeaders
-          }
-        );
-
-      }
-    }
-
-    if (request.method === "GET" && url.pathname === "/api/admin/users") {
-
-      try {
-
-        const users = await env.d1_server
-          .prepare(`
+		if (request.method === 'GET' && url.pathname === '/api/admin/users') {
+			try {
+				const users = await env.d1_server
+					.prepare(
+						`
     SELECT
       id,
       name,
@@ -1099,83 +1010,73 @@ Questions? Just reply to this email.
       created_at
     FROM users
     ORDER BY created_at DESC
-  `)
-          .all();
+  `,
+					)
+					.all();
 
-        return Response.json(
-          {
-            success: true,
-            users: users.results
-          },
-          {
-            headers: corsHeaders
-          }
-        );
+				return Response.json(
+					{
+						success: true,
+						users: users.results,
+					},
+					{
+						headers: corsHeaders,
+					},
+				);
+			} catch (err) {
+				return Response.json(
+					{
+						success: false,
+						error: err.message,
+					},
+					{
+						status: 500,
+						headers: corsHeaders,
+					},
+				);
+			}
+		}
 
-      } catch (err) {
-
-        return Response.json(
-          {
-            success: false,
-            error: err.message
-          },
-          {
-            status: 500,
-            headers: corsHeaders
-          }
-        );
-
-      }
-
-    }
-
-    if (request.method === "GET" && url.pathname === "/api/admin/products") {
-
-      try {
-
-        const products = await env.d1_server
-          .prepare(`
+		if (request.method === 'GET' && url.pathname === '/api/admin/products') {
+			try {
+				const products = await env.d1_server
+					.prepare(
+						`
         SELECT *
         FROM products
         ORDER BY id DESC
-      `)
-          .all();
+      `,
+					)
+					.all();
 
-        return Response.json(
-          {
-            success: true,
-            products: products.results
-          },
-          {
-            headers: corsHeaders
-          }
-        );
+				return Response.json(
+					{
+						success: true,
+						products: products.results,
+					},
+					{
+						headers: corsHeaders,
+					},
+				);
+			} catch (err) {
+				return Response.json(
+					{
+						success: false,
+						error: err.message,
+					},
+					{
+						status: 500,
+						headers: corsHeaders,
+					},
+				);
+			}
+		}
 
-      } catch (err) {
-
-        return Response.json(
-          {
-            success: false,
-            error: err.message
-          },
-          {
-            status: 500,
-            headers: corsHeaders
-          }
-        );
-
-      }
-
-    }
-
-
-
-    if (request.method === "GET" && url.pathname === "/api/admin/orders") {
-
-      try {
-
-        const orders = await env.d1_server
-          .prepare(`
+		if (request.method === 'GET' && url.pathname === '/api/admin/orders') {
+			try {
+				const orders = await env.d1_server
+					.prepare(
+						`
         SELECT
 
           o.id,
@@ -1194,56 +1095,42 @@ Questions? Just reply to this email.
         ON o.user_id = u.id
 
         ORDER BY o.created_at DESC
-      `)
-          .all();
+      `,
+					)
+					.all();
 
-        return Response.json(
-          {
-            success: true,
-            orders: orders.results
-          },
-          {
-            headers: corsHeaders
-          }
-        );
+				return Response.json(
+					{
+						success: true,
+						orders: orders.results,
+					},
+					{
+						headers: corsHeaders,
+					},
+				);
+			} catch (err) {
+				return Response.json(
+					{
+						success: false,
+						error: err.message,
+					},
+					{
+						status: 500,
+						headers: corsHeaders,
+					},
+				);
+			}
+		}
 
-      } catch (err) {
+		if (request.method === 'PUT' && url.pathname.startsWith('/api/admin/products/')) {
+			try {
+				const productId = url.pathname.split('/').pop();
 
-        return Response.json(
-          {
-            success: false,
-            error: err.message
-          },
-          {
-            status: 500,
-            headers: corsHeaders
-          }
-        );
+				const { name, description, price, stock, image, category } = await request.json();
 
-      }
-
-    }
-
-    if (
-      request.method === "PUT" &&
-      url.pathname.startsWith("/api/admin/products/")
-    ) {
-
-      try {
-
-        const productId = url.pathname.split("/").pop();
-
-        const {
-          name,
-          description,
-          price,
-          stock,
-          image,
-          category
-        } = await request.json();
-
-        const result = await env.d1_server
-          .prepare(`
+				const result = await env.d1_server
+					.prepare(
+						`
         UPDATE products
         SET
           name = ?,
@@ -1253,94 +1140,82 @@ Questions? Just reply to this email.
           image = ?,
           category = ?
         WHERE id = ?
-      `)
-          .bind(
-            name,
-            description,
-            price,
-            stock,
-            image,
-            category,
-            productId
-          )
-          .run();
+      `,
+					)
+					.bind(name, description, price, stock, image, category, productId)
+					.run();
 
-        if (result.meta.changes === 0) {
+				if (result.meta.changes === 0) {
+					return Response.json(
+						{
+							success: false,
+							message: 'Product not found',
+						},
+						{
+							status: 404,
+							headers: corsHeaders,
+						},
+					);
+				}
 
-          return Response.json(
-            {
-              success: false,
-              message: "Product not found"
-            },
-            {
-              status: 404,
-              headers: corsHeaders
-            }
-          );
+				return Response.json(
+					{
+						success: true,
+						message: 'Product updated successfully',
+					},
+					{
+						headers: corsHeaders,
+					},
+				);
+			} catch (err) {
+				return Response.json(
+					{
+						success: false,
+						error: err.message,
+					},
+					{
+						status: 500,
+						headers: corsHeaders,
+					},
+				);
+			}
+		}
 
-        }
+		if (request.method === 'GET' && url.pathname === '/api/user/orders') {
+			try {
+				const userId = url.searchParams.get('userId');
 
-        return Response.json(
-          {
-            success: true,
-            message: "Product updated successfully"
-          },
-          {
-            headers: corsHeaders
-          }
-        );
+				if (!userId) {
+					return Response.json(
+						{
+							success: false,
+							message: 'User ID is required',
+						},
+						{
+							status: 400,
+							headers: corsHeaders,
+						},
+					);
+				}
 
-      } catch (err) {
-
-        return Response.json(
-          {
-            success: false,
-            error: err.message
-          },
-          {
-            status: 500,
-            headers: corsHeaders
-          }
-        );
-
-      }
-
-    }
-
-    if (request.method === "GET" && url.pathname === "/api/user/orders") {
-      try {
-
-        const userId = url.searchParams.get("userId");
-
-        if (!userId) {
-          return Response.json(
-            {
-              success: false,
-              message: "User ID is required"
-            },
-            {
-              status: 400,
-              headers: corsHeaders
-            }
-          );
-        }
-
-        // Get all orders
-        const orders = await env.d1_server
-          .prepare(`
+				// Get all orders
+				const orders = await env.d1_server
+					.prepare(
+						`
         SELECT *
         FROM orders
         WHERE user_id = ?
         ORDER BY created_at DESC
-      `)
-          .bind(userId)
-          .all();
+      `,
+					)
+					.bind(userId)
+					.all();
 
-        // Attach items to each order
-        for (const order of orders.results) {
-
-          const items = await env.d1_server
-            .prepare(`
+				// Attach items to each order
+				for (const order of orders.results) {
+					const items = await env.d1_server
+						.prepare(
+							`
           SELECT
               oi.id,
               oi.product_id,
@@ -1354,78 +1229,67 @@ Questions? Just reply to this email.
           ON oi.product_id = p.id
 
           WHERE oi.order_id = ?
-        `)
-            .bind(order.id)
-            .all();
+        `,
+						)
+						.bind(order.id)
+						.all();
 
-          order.items = items.results;
-        }
+					order.items = items.results;
+				}
 
-        return Response.json(
-          {
-            success: true,
-            totalOrders: orders.results.length,
-            orders: orders.results
-          },
-          {
-            headers: corsHeaders
-          }
-        );
+				return Response.json(
+					{
+						success: true,
+						totalOrders: orders.results.length,
+						orders: orders.results,
+					},
+					{
+						headers: corsHeaders,
+					},
+				);
+			} catch (err) {
+				return Response.json(
+					{
+						success: false,
+						error: err.message,
+					},
+					{
+						status: 500,
+						headers: corsHeaders,
+					},
+				);
+			}
+		}
 
-      } catch (err) {
+		if (request.method === 'PUT' && url.pathname.startsWith('/api/admin/orders/') && url.pathname.endsWith('/status')) {
+			try {
+				const parts = url.pathname.split('/');
+				const orderId = parts[4];
 
-        return Response.json(
-          {
-            success: false,
-            error: err.message
-          },
-          {
-            status: 500,
-            headers: corsHeaders
-          }
-        );
+				const { order_status } = await request.json();
 
-      }
-    }
+				const validStatuses = ['Received', 'In Transit', 'Delivered', 'Unable to Reach'];
 
+				if (!validStatuses.includes(order_status)) {
+					return Response.json(
+						{
+							success: false,
+							message: 'Invalid order status',
+						},
+						{
+							status: 400,
+							headers: corsHeaders,
+						},
+					);
+				}
 
-    if (
-      request.method === "PUT" &&
-      url.pathname.startsWith("/api/admin/orders/") &&
-      url.pathname.endsWith("/status")
-    ) {
-      try {
-        const parts = url.pathname.split("/");
-        const orderId = parts[4];
+				// -----------------------------------
+				// 1. Get order + customer information
+				// -----------------------------------
 
-        const { order_status } = await request.json();
-
-        const validStatuses = [
-          "Received",
-          "In Transit",
-          "Delivered",
-          "Unable to Reach"
-        ];
-
-        if (!validStatuses.includes(order_status)) {
-          return Response.json(
-            {
-              success: false,
-              message: "Invalid order status"
-            },
-            {
-              status: 400,
-              headers: corsHeaders
-            }
-          );
-        }
-
-        // -----------------------------------
-        // 1. Get order + customer information
-        // -----------------------------------
-
-        const order = await env.d1_server
-          .prepare(`
+				const order = await env.d1_server
+					.prepare(
+						`
         SELECT
           id,
           customer_name,
@@ -1434,100 +1298,96 @@ Questions? Just reply to this email.
           order_status
         FROM orders
         WHERE id = ?
-      `)
-          .bind(orderId)
-          .first();
+      `,
+					)
+					.bind(orderId)
+					.first();
 
-        if (!order) {
-          return Response.json(
-            {
-              success: false,
-              message: "Order not found"
-            },
-            {
-              status: 404,
-              headers: corsHeaders
-            }
-          );
-        }
+				if (!order) {
+					return Response.json(
+						{
+							success: false,
+							message: 'Order not found',
+						},
+						{
+							status: 404,
+							headers: corsHeaders,
+						},
+					);
+				}
 
-        // -----------------------------------
-        // 2. Update order status
-        // -----------------------------------
+				// -----------------------------------
+				// 2. Update order status
+				// -----------------------------------
 
-        const result = await env.d1_server
-          .prepare(`
+				const result = await env.d1_server
+					.prepare(
+						`
         UPDATE orders
         SET order_status = ?
         WHERE id = ?
-      `)
-          .bind(order_status, orderId)
-          .run();
+      `,
+					)
+					.bind(order_status, orderId)
+					.run();
 
-        if (result.meta.changes === 0) {
-          return Response.json(
-            {
-              success: false,
-              message: "Order status was not updated"
-            },
-            {
-              status: 400,
-              headers: corsHeaders
-            }
-          );
-        }
+				if (result.meta.changes === 0) {
+					return Response.json(
+						{
+							success: false,
+							message: 'Order status was not updated',
+						},
+						{
+							status: 400,
+							headers: corsHeaders,
+						},
+					);
+				}
 
-        // -----------------------------------
-        // 3. Create email content
-        // -----------------------------------
+				// -----------------------------------
+				// 3. Create email content
+				// -----------------------------------
 
-        let emailSubject = `Your Idexcy Order #${orderId} Update`;
+				let emailSubject = `Your Idexcy Order #${orderId} Update`;
 
-        let emailHeading = `Your order is now ${order_status}`;
+				let emailHeading = `Your order is now ${order_status}`;
 
-        let emailMessage = "";
+				let emailMessage = '';
 
-        if (order_status === "Received") {
-          emailMessage =
-            "We've received your order and will begin preparing it shortly.";
-        }
+				if (order_status === 'Received') {
+					emailMessage = "We've received your order and will begin preparing it shortly.";
+				}
 
-        if (order_status === "In Transit") {
-          emailMessage =
-            "Good news! Your Idexcy order is on its way.";
-        }
+				if (order_status === 'In Transit') {
+					emailMessage = 'Good news! Your Idexcy order is on its way.';
+				}
 
-        if (order_status === "Delivered") {
-          emailMessage =
-            "Your Idexcy order has been delivered. We hope you enjoy every bite.";
-        }
+				if (order_status === 'Delivered') {
+					emailMessage = 'Your Idexcy order has been delivered. We hope you enjoy every bite.';
+				}
 
-        if (order_status === "Unable to Reach") {
-          emailMessage =
-            "We were unable to reach you while attempting to deliver your Idexcy order. Our delivery team may try again soon.";
-        }
+				if (order_status === 'Unable to Reach') {
+					emailMessage = 'We were unable to reach you while attempting to deliver your Idexcy order. Our delivery team may try again soon.';
+				}
 
-        // -----------------------------------
-        // 4. Send email using Resend
-        // -----------------------------------
+				// -----------------------------------
+				// 4. Send email using Resend
+				// -----------------------------------
 
-        let emailSent = false;
+				let emailSent = false;
 
-        try {
-
-          const resendResponse = await fetch(
-            "https://api.resend.com/emails",
-            {
-              method: "POST",
-              headers: {
-                "Authorization": `Bearer ${env.RESEND_API_KEY}`,
-                "Content-Type": "application/json"
-              },
-              body: JSON.stringify({
-                from: "Idexcy <orders@idexcy.com>",
-                to: [order.email],
-                subject: emailSubject,
-                html: `
+				try {
+					const resendResponse = await fetch('https://api.resend.com/emails', {
+						method: 'POST',
+						headers: {
+							Authorization: `Bearer ${env.RESEND_API_KEY}`,
+							'Content-Type': 'application/json',
+						},
+						body: JSON.stringify({
+							from: 'Idexcy <orders@idexcy.com>',
+							to: [order.email],
+							subject: emailSubject,
+							html: `
               <!DOCTYPE html>
               <html>
               <body style="
@@ -1554,7 +1414,7 @@ Questions? Just reply to this email.
                   </h1>
 
                   <p style="font-size:16px;">
-                    Hi ${order.customer_name || "there"},
+                    Hi ${order.customer_name || 'there'},
                   </p>
 
                   <h2 style="
@@ -1610,101 +1470,87 @@ Questions? Just reply to this email.
 
               </body>
               </html>
-            `
-              })
-            }
-          );
+            `,
+						}),
+					});
 
-          const resendData = await resendResponse.json();
+					const resendData = await resendResponse.json();
 
-          console.log("Resend response:", resendData);
+					console.log('Resend response:', resendData);
 
-          if (resendResponse.ok) {
-            emailSent = true;
-          } else {
-            console.error(
-              "Failed to send email:",
-              resendData
-            );
-          }
+					if (resendResponse.ok) {
+						emailSent = true;
+					} else {
+						console.error('Failed to send email:', resendData);
+					}
+				} catch (emailError) {
+					console.error('Email sending error:', emailError);
+				}
 
-        } catch (emailError) {
+				// -----------------------------------
+				// 5. Return response
+				// -----------------------------------
 
-          console.error(
-            "Email sending error:",
-            emailError
-          );
+				return Response.json(
+					{
+						success: true,
+						message: 'Order status updated successfully',
+						orderId,
+						order_status,
+						emailSent,
+					},
+					{
+						headers: corsHeaders,
+					},
+				);
+			} catch (err) {
+				console.error('Order status error:', err);
 
-        }
+				return Response.json(
+					{
+						success: false,
+						error: err.message,
+					},
+					{
+						status: 500,
+						headers: corsHeaders,
+					},
+				);
+			}
+		}
+		if (request.method === 'GET' && url.pathname.startsWith('/api/orders/')) {
+			try {
+				const orderId = url.pathname.split('/').pop();
 
-        // -----------------------------------
-        // 5. Return response
-        // -----------------------------------
-
-        return Response.json(
-          {
-            success: true,
-            message: "Order status updated successfully",
-            orderId,
-            order_status,
-            emailSent
-          },
-          {
-            headers: corsHeaders
-          }
-        );
-
-      } catch (err) {
-
-        console.error("Order status error:", err);
-
-        return Response.json(
-          {
-            success: false,
-            error: err.message
-          },
-          {
-            status: 500,
-            headers: corsHeaders
-          }
-        );
-
-      }
-    }
-    if (
-      request.method === "GET" &&
-      url.pathname.startsWith("/api/orders/")
-    ) {
-      try {
-
-        const orderId = url.pathname.split("/").pop();
-
-        // Fetch order details
-        const order = await env.d1_server
-          .prepare(`
+				// Fetch order details
+				const order = await env.d1_server
+					.prepare(
+						`
         SELECT *
         FROM orders
         WHERE id = ?
-      `)
-          .bind(orderId)
-          .first();
+      `,
+					)
+					.bind(orderId)
+					.first();
 
-        if (!order) {
-          return Response.json(
-            {
-              success: false,
-              message: "Order not found"
-            },
-            {
-              status: 404,
-              headers: corsHeaders
-            }
-          );
-        }
+				if (!order) {
+					return Response.json(
+						{
+							success: false,
+							message: 'Order not found',
+						},
+						{
+							status: 404,
+							headers: corsHeaders,
+						},
+					);
+				}
 
-        // Fetch products in this order
-        const items = await env.d1_server
-          .prepare(`
+				// Fetch products in this order
+				const items = await env.d1_server
+					.prepare(
+						`
         SELECT
           oi.id,
           oi.product_id,
@@ -1717,39 +1563,35 @@ Questions? Just reply to this email.
         JOIN products p
           ON oi.product_id = p.id
         WHERE oi.order_id = ?
-      `)
-          .bind(orderId)
-          .all();
+      `,
+					)
+					.bind(orderId)
+					.all();
 
-        order.items = items.results;
+				order.items = items.results;
 
-        return Response.json(
-          {
-            success: true,
-            order
-          },
-          {
-            headers: corsHeaders
-          }
-        );
-
-      } catch (err) {
-
-        return Response.json(
-          {
-            success: false,
-            error: err.message
-          },
-          {
-            status: 500,
-            headers: corsHeaders
-          }
-        );
-
-      }
-    }
-    return new Response("Not Found", { status: 404, headers: corsHeaders, });
-  }
-
-
+				return Response.json(
+					{
+						success: true,
+						order,
+					},
+					{
+						headers: corsHeaders,
+					},
+				);
+			} catch (err) {
+				return Response.json(
+					{
+						success: false,
+						error: err.message,
+					},
+					{
+						status: 500,
+						headers: corsHeaders,
+					},
+				);
+			}
+		}
+		return new Response('Not Found', { status: 404, headers: corsHeaders });
+	},
 };
