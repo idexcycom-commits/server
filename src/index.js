@@ -3,6 +3,8 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type, Authorization",
 };
+
+
   export async function verifyEmail(request, env) {
     try {
         const { email, code } = await request.json();
@@ -108,7 +110,87 @@ if (url.pathname === "/api/verify-email" && request.method === "POST") {
     return verifyEmail(request, env);
 }
      
+const PBKDF2_ITERATIONS = 310000;
 
+function bytesToBase64(bytes) {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+function base64ToBytes(value) {
+  const binary = atob(value);
+  return Uint8Array.from(binary, char => char.charCodeAt(0));
+}
+
+async function hashPassword(password) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+
+  const keyMaterial = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(password),
+    "PBKDF2",
+    false,
+    ["deriveBits"]
+  );
+
+  const derivedBits = await crypto.subtle.deriveBits(
+    {
+      name: "PBKDF2",
+      salt,
+      iterations: PBKDF2_ITERATIONS,
+      hash: "SHA-256"
+    },
+    keyMaterial,
+    256
+  );
+
+  return `pbkdf2$${PBKDF2_ITERATIONS}$${bytesToBase64(salt)}$${bytesToBase64(
+    new Uint8Array(derivedBits)
+  )}`;
+}
+
+async function verifyPassword(password, storedHash) {
+  if (!storedHash?.startsWith("pbkdf2$")) {
+    return false;
+  }
+
+  const [, iterations, saltBase64, hashBase64] = storedHash.split("$");
+
+  const salt = base64ToBytes(saltBase64);
+
+  const keyMaterial = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(password),
+    "PBKDF2",
+    false,
+    ["deriveBits"]
+  );
+
+  const derivedBits = await crypto.subtle.deriveBits(
+    {
+      name: "PBKDF2",
+      salt,
+      iterations: Number(iterations),
+      hash: "SHA-256"
+    },
+    keyMaterial,
+    256
+  );
+
+  const derived = new Uint8Array(derivedBits);
+  const expected = base64ToBytes(hashBase64);
+
+  if (derived.length !== expected.length) return false;
+
+  let difference = 0;
+
+  for (let i = 0; i < derived.length; i++) {
+    difference |= derived[i] ^ expected[i];
+  }
+
+  return difference === 0;
+}
 
 
 if (request.method === "POST" && url.pathname === "/api/register") {
@@ -130,8 +212,8 @@ if (request.method === "POST" && url.pathname === "/api/register") {
     }
 
     // TODO: Replace with a proper password hash
-    const passwordHash = password;
-
+   // const passwordHash = password;
+const passwordHash = await hashPassword(password);
     // Check if user already exists
     const existingUser = await env.d1_server
       .prepare("SELECT id FROM users WHERE email = ?")
@@ -295,8 +377,13 @@ if (request.method === "POST" && url.pathname === "/api/register") {
             }
           );
         }
-  
-        if (user.password_hash !== password) {
+  const passwordValid = await verifyPassword(
+  password,
+  user.password_hash
+);
+
+if (!passwordValid) {
+       
           return Response.json(
             {
               success: false,
