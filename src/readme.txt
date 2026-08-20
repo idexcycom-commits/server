@@ -29,7 +29,7 @@ await fetch("https://d1-server.idexcy-com.workers.dev/api/orders", {
 
 
 
-https://d1-server.idexcy-com.workers.dev/api/products
+https://d1-server.idexcy-com.workers.dev/api/admin/products
 
 {
   "name": "90% Dark Chocolate",
@@ -38,4 +38,11 @@ https://d1-server.idexcy-com.workers.dev/api/products
   "stock": 100,
   "image": "https://idexcy.com/images/90-dark.jpg",
   "category": "Dark Chocolate"
+}
+
+https://d1-server.idexcy-com.workers.dev/api/users/1
+{
+  "name": "John Doe",
+  "email": "john@example.com",
+  "is_admin": 1
 }

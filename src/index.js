@@ -944,7 +944,7 @@ if (request.method === "GET" && url.pathname === "/api/check-resend") {
   }
 }
 
-     if (
+if (
   request.method === "PUT" &&
   url.pathname.startsWith("/api/users/")
 ) {
@@ -954,39 +954,48 @@ if (request.method === "GET" && url.pathname === "/api/check-resend") {
     const {
       name,
       email,
-      phone,
-      address,
-      city,
-      state,
-      pincode
+      is_admin
     } = await request.json();
 
-    const result = await env.d1_server
+    // Validate required fields
+    if (!name || !email) {
+      return Response.json(
+        {
+          success: false,
+          message: "Name and email are required"
+        },
+        {
+          status: 400,
+          headers: corsHeaders
+        }
+      );
+    }
+
+    // Validate is_admin
+    if (is_admin !== 0 && is_admin !== 1) {
+      return Response.json(
+        {
+          success: false,
+          message: "is_admin must be 0 or 1"
+        },
+        {
+          status: 400,
+          headers: corsHeaders
+        }
+      );
+    }
+
+    // Check if user exists
+    const existingUser = await env.d1_server
       .prepare(`
-        UPDATE users
-        SET
-          name = ?,
-          email = ?,
-          phone = ?,
-          address = ?,
-          city = ?,
-          state = ?,
-          pincode = ?
+        SELECT id
+        FROM users
         WHERE id = ?
       `)
-      .bind(
-        name,
-        email,
-        phone,
-        address,
-        city,
-        state,
-        pincode,
-        userId
-      )
-      .run();
+      .bind(userId)
+      .first();
 
-    if (result.meta.changes === 0) {
+    if (!existingUser) {
       return Response.json(
         {
           success: false,
@@ -999,10 +1008,59 @@ if (request.method === "GET" && url.pathname === "/api/check-resend") {
       );
     }
 
+    // Check if email is already used by another user
+    const emailUser = await env.d1_server
+      .prepare(`
+        SELECT id
+        FROM users
+        WHERE email = ?
+        AND id != ?
+      `)
+      .bind(email, userId)
+      .first();
+
+    if (emailUser) {
+      return Response.json(
+        {
+          success: false,
+          message: "Email is already being used by another user"
+        },
+        {
+          status: 409,
+          headers: corsHeaders
+        }
+      );
+    }
+
+    // Update user
+    await env.d1_server
+      .prepare(`
+        UPDATE users
+        SET
+          name = ?,
+          email = ?,
+          is_admin = ?,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `)
+      .bind(
+        name,
+        email,
+        is_admin,
+        userId
+      )
+      .run();
+
     return Response.json(
       {
         success: true,
-        message: "User updated successfully"
+        message: "User updated successfully",
+        user: {
+          id: userId,
+          name,
+          email,
+          is_admin
+        }
       },
       {
         headers: corsHeaders
@@ -1010,6 +1068,8 @@ if (request.method === "GET" && url.pathname === "/api/check-resend") {
     );
 
   } catch (err) {
+
+    console.error("Update user error:", err);
 
     return Response.json(
       {
@@ -1024,7 +1084,6 @@ if (request.method === "GET" && url.pathname === "/api/check-resend") {
 
   }
 }
-
 
           if (request.method === "GET" && url.pathname === "/api/admin/users") {
 
