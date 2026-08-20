@@ -110,7 +110,7 @@ if (url.pathname === "/api/verify-email" && request.method === "POST") {
     return verifyEmail(request, env);
 }
      
-const PBKDF2_ITERATIONS = 310000;
+const PBKDF2_ITERATIONS = 100000;
 
 function bytesToBase64(bytes) {
   let binary = "";
