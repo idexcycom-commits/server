@@ -1592,6 +1592,884 @@ Questions? Just reply to this email.
 				);
 			}
 		}
+
+if (
+    request.method === "GET" &&
+    url.pathname === "/api/admin/blogs"
+) {
+    try {
+        const blogs = await env.d1_server
+            .prepare(`
+                SELECT
+                    id,
+                    title,
+                    slug,
+                    short_description,
+                    featured_image_url,
+                    meta_title,
+                    meta_description,
+                    author_name,
+                    status,
+                    published_at,
+                    created_at,
+                    updated_at
+                FROM blogs
+                ORDER BY created_at DESC
+            `)
+            .all();
+
+        return Response.json(
+            {
+                success: true,
+                blogs: blogs.results
+            },
+            {
+                headers: corsHeaders
+            }
+        );
+
+    } catch (err) {
+
+        console.error("Get admin blogs error:", err);
+
+        return Response.json(
+            {
+                success: false,
+                error: err.message
+            },
+            {
+                status: 500,
+                headers: corsHeaders
+            }
+        );
+    }
+}
+
+if (
+    request.method === "POST" &&
+    url.pathname === "/api/admin/blogs"
+) {
+    try {
+
+        const {
+            title,
+            slug,
+            shortDescription,
+            featuredImageUrl,
+            metaTitle,
+            metaDescription,
+            authorName,
+            status,
+            publishedAt,
+            sections,
+            images,
+            tags
+        } = await request.json();
+
+        // -----------------------------------
+        // Validation
+        // -----------------------------------
+
+        if (!title || !slug || !shortDescription) {
+            return Response.json(
+                {
+                    success: false,
+                    message: "Title, slug and short description are required"
+                },
+                {
+                    status: 400,
+                    headers: corsHeaders
+                }
+            );
+        }
+
+        // -----------------------------------
+        // Check duplicate slug
+        // -----------------------------------
+
+        const existingBlog = await env.d1_server
+            .prepare(`
+                SELECT id
+                FROM blogs
+                WHERE slug = ?
+            `)
+            .bind(slug)
+            .first();
+
+        if (existingBlog) {
+            return Response.json(
+                {
+                    success: false,
+                    message: "A blog with this slug already exists"
+                },
+                {
+                    status: 409,
+                    headers: corsHeaders
+                }
+            );
+        }
+
+        // -----------------------------------
+        // Create blog
+        // -----------------------------------
+
+        const result = await env.d1_server
+            .prepare(`
+                INSERT INTO blogs (
+                    title,
+                    slug,
+                    short_description,
+                    featured_image_url,
+                    meta_title,
+                    meta_description,
+                    author_name,
+                    status,
+                    published_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `)
+            .bind(
+                title,
+                slug,
+                shortDescription,
+                featuredImageUrl || "",
+                metaTitle || "",
+                metaDescription || "",
+                authorName || "IDEXCY",
+                status || "draft",
+                publishedAt || null
+            )
+            .run();
+
+        const blogId = result.meta.last_row_id;
+
+        // -----------------------------------
+        // Insert sections
+        // -----------------------------------
+
+        if (Array.isArray(sections)) {
+
+            for (let i = 0; i < sections.length; i++) {
+
+                const section = sections[i];
+
+                if (!section.content) {
+                    continue;
+                }
+
+                await env.d1_server
+                    .prepare(`
+                        INSERT INTO blog_sections (
+                            blog_id,
+                            section_order,
+                            heading,
+                            content
+                        )
+                        VALUES (?, ?, ?, ?)
+                    `)
+                    .bind(
+                        blogId,
+                        i,
+                        section.heading || "",
+                        section.content
+                    )
+                    .run();
+            }
+        }
+
+        // -----------------------------------
+        // Insert images
+        // -----------------------------------
+
+        if (Array.isArray(images)) {
+
+            for (let i = 0; i < images.length; i++) {
+
+                const image = images[i];
+
+                if (!image.imageUrl) {
+                    continue;
+                }
+
+                await env.d1_server
+                    .prepare(`
+                        INSERT INTO blog_images (
+                            blog_id,
+                            image_url,
+                            alt_text,
+                            image_order
+                        )
+                        VALUES (?, ?, ?, ?)
+                    `)
+                    .bind(
+                        blogId,
+                        image.imageUrl,
+                        image.altText || "",
+                        image.imageOrder ?? i
+                    )
+                    .run();
+            }
+        }
+
+        // -----------------------------------
+        // Insert tags
+        // -----------------------------------
+
+        if (Array.isArray(tags)) {
+
+            for (const tagName of tags) {
+
+                if (!tagName || !tagName.trim()) {
+                    continue;
+                }
+
+                const cleanTag = tagName.trim();
+
+                // Create tag if it doesn't exist
+                let tag = await env.d1_server
+                    .prepare(`
+                        SELECT id
+                        FROM blog_tags
+                        WHERE name = ?
+                    `)
+                    .bind(cleanTag)
+                    .first();
+
+                let tagId;
+
+                if (tag) {
+
+                    tagId = tag.id;
+
+                } else {
+
+                    const tagSlug = cleanTag
+                        .toLowerCase()
+                        .trim()
+                        .replace(/[^a-z0-9]+/g, "-")
+                        .replace(/^-+|-+$/g, "");
+
+                    const tagResult = await env.d1_server
+                        .prepare(`
+                            INSERT INTO blog_tags (
+                                name,
+                                slug
+                            )
+                            VALUES (?, ?)
+                        `)
+                        .bind(
+                            cleanTag,
+                            tagSlug
+                        )
+                        .run();
+
+                    tagId = tagResult.meta.last_row_id;
+                }
+
+                // Connect tag to blog
+                await env.d1_server
+                    .prepare(`
+                        INSERT OR IGNORE INTO blog_tag_relations (
+                            blog_id,
+                            tag_id
+                        )
+                        VALUES (?, ?)
+                    `)
+                    .bind(
+                        blogId,
+                        tagId
+                    )
+                    .run();
+            }
+        }
+
+        return Response.json(
+            {
+                success: true,
+                message: "Blog created successfully",
+                blogId
+            },
+            {
+                headers: corsHeaders
+            }
+        );
+
+    } catch (err) {
+
+        console.error("Create blog error:", err);
+
+        return Response.json(
+            {
+                success: false,
+                error: err.message
+            },
+            {
+                status: 500,
+                headers: corsHeaders
+            }
+        );
+    }
+}
+
+if (
+    request.method === "GET" &&
+    url.pathname.startsWith("/api/admin/blogs/")
+) {
+    try {
+
+        const blogId = url.pathname.split("/").pop();
+
+        if (!blogId) {
+            return Response.json(
+                {
+                    success: false,
+                    message: "Blog ID is required"
+                },
+                {
+                    status: 400,
+                    headers: corsHeaders
+                }
+            );
+        }
+
+        // -----------------------------------
+        // Get blog
+        // -----------------------------------
+
+        const blog = await env.d1_server
+            .prepare(`
+                SELECT *
+                FROM blogs
+                WHERE id = ?
+            `)
+            .bind(blogId)
+            .first();
+
+        if (!blog) {
+            return Response.json(
+                {
+                    success: false,
+                    message: "Blog not found"
+                },
+                {
+                    status: 404,
+                    headers: corsHeaders
+                }
+            );
+        }
+
+        // -----------------------------------
+        // Get sections
+        // -----------------------------------
+
+        const sections = await env.d1_server
+            .prepare(`
+                SELECT
+                    id,
+                    heading,
+                    content,
+                    section_order
+                FROM blog_sections
+                WHERE blog_id = ?
+                ORDER BY section_order ASC
+            `)
+            .bind(blogId)
+            .all();
+
+        // -----------------------------------
+        // Get images
+        // -----------------------------------
+
+        const images = await env.d1_server
+            .prepare(`
+                SELECT
+                    id,
+                    image_url,
+                    alt_text,
+                    image_order
+                FROM blog_images
+                WHERE blog_id = ?
+                ORDER BY image_order ASC
+            `)
+            .bind(blogId)
+            .all();
+
+        // -----------------------------------
+        // Get tags
+        // -----------------------------------
+
+        const tags = await env.d1_server
+            .prepare(`
+                SELECT
+                    bt.id,
+                    bt.name,
+                    bt.slug
+                FROM blog_tags bt
+                JOIN blog_tag_relations btr
+                    ON bt.id = btr.tag_id
+                WHERE btr.blog_id = ?
+                ORDER BY bt.name ASC
+            `)
+            .bind(blogId)
+            .all();
+
+        return Response.json(
+            {
+                success: true,
+                blog: {
+                    ...blog,
+                    sections: sections.results,
+                    images: images.results,
+                    tags: tags.results
+                }
+            },
+            {
+                headers: corsHeaders
+            }
+        );
+
+    } catch (err) {
+
+        console.error("Get blog error:", err);
+
+        return Response.json(
+            {
+                success: false,
+                error: err.message
+            },
+            {
+                status: 500,
+                headers: corsHeaders
+            }
+        );
+    }
+}
+
+if (
+    request.method === "PUT" &&
+    url.pathname.startsWith("/api/admin/blogs/")
+) {
+    try {
+
+        const blogId = url.pathname.split("/").pop();
+
+        const {
+            title,
+            slug,
+            shortDescription,
+            featuredImageUrl,
+            metaTitle,
+            metaDescription,
+            authorName,
+            status,
+            publishedAt,
+            sections,
+            images,
+            tags
+        } = await request.json();
+
+        // -----------------------------------
+        // Validation
+        // -----------------------------------
+
+        if (!blogId) {
+            return Response.json(
+                {
+                    success: false,
+                    message: "Blog ID is required"
+                },
+                {
+                    status: 400,
+                    headers: corsHeaders
+                }
+            );
+        }
+
+        if (!title || !slug || !shortDescription) {
+            return Response.json(
+                {
+                    success: false,
+                    message: "Title, slug and short description are required"
+                },
+                {
+                    status: 400,
+                    headers: corsHeaders
+                }
+            );
+        }
+
+        // -----------------------------------
+        // Check blog exists
+        // -----------------------------------
+
+        const existingBlog = await env.d1_server
+            .prepare(`
+                SELECT id
+                FROM blogs
+                WHERE id = ?
+            `)
+            .bind(blogId)
+            .first();
+
+        if (!existingBlog) {
+            return Response.json(
+                {
+                    success: false,
+                    message: "Blog not found"
+                },
+                {
+                    status: 404,
+                    headers: corsHeaders
+                }
+            );
+        }
+
+        // -----------------------------------
+        // Check slug belongs to another blog
+        // -----------------------------------
+
+        const duplicateSlug = await env.d1_server
+            .prepare(`
+                SELECT id
+                FROM blogs
+                WHERE slug = ?
+                AND id != ?
+            `)
+            .bind(slug, blogId)
+            .first();
+
+        if (duplicateSlug) {
+            return Response.json(
+                {
+                    success: false,
+                    message: "Another blog already uses this slug"
+                },
+                {
+                    status: 409,
+                    headers: corsHeaders
+                }
+            );
+        }
+
+        // -----------------------------------
+        // Update main blog
+        // -----------------------------------
+
+        await env.d1_server
+            .prepare(`
+                UPDATE blogs
+                SET
+                    title = ?,
+                    slug = ?,
+                    short_description = ?,
+                    featured_image_url = ?,
+                    meta_title = ?,
+                    meta_description = ?,
+                    author_name = ?,
+                    status = ?,
+                    published_at = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            `)
+            .bind(
+                title,
+                slug,
+                shortDescription,
+                featuredImageUrl || "",
+                metaTitle || "",
+                metaDescription || "",
+                authorName || "IDEXCY",
+                status || "draft",
+                publishedAt || null,
+                blogId
+            )
+            .run();
+
+        // -----------------------------------
+        // Replace sections
+        // -----------------------------------
+
+        await env.d1_server
+            .prepare(`
+                DELETE FROM blog_sections
+                WHERE blog_id = ?
+            `)
+            .bind(blogId)
+            .run();
+
+        if (Array.isArray(sections)) {
+
+            for (let i = 0; i < sections.length; i++) {
+
+                const section = sections[i];
+
+                if (!section.content) {
+                    continue;
+                }
+
+                await env.d1_server
+                    .prepare(`
+                        INSERT INTO blog_sections (
+                            blog_id,
+                            section_order,
+                            heading,
+                            content
+                        )
+                        VALUES (?, ?, ?, ?)
+                    `)
+                    .bind(
+                        blogId,
+                        i,
+                        section.heading || "",
+                        section.content
+                    )
+                    .run();
+            }
+        }
+
+        // -----------------------------------
+        // Replace images
+        // -----------------------------------
+
+        await env.d1_server
+            .prepare(`
+                DELETE FROM blog_images
+                WHERE blog_id = ?
+            `)
+            .bind(blogId)
+            .run();
+
+        if (Array.isArray(images)) {
+
+            for (let i = 0; i < images.length; i++) {
+
+                const image = images[i];
+
+                if (!image.imageUrl) {
+                    continue;
+                }
+
+                await env.d1_server
+                    .prepare(`
+                        INSERT INTO blog_images (
+                            blog_id,
+                            image_url,
+                            alt_text,
+                            image_order
+                        )
+                        VALUES (?, ?, ?, ?)
+                    `)
+                    .bind(
+                        blogId,
+                        image.imageUrl,
+                        image.altText || "",
+                        image.imageOrder ?? i
+                    )
+                    .run();
+            }
+        }
+
+        // -----------------------------------
+        // Remove existing tag relations
+        // -----------------------------------
+
+        await env.d1_server
+            .prepare(`
+                DELETE FROM blog_tag_relations
+                WHERE blog_id = ?
+            `)
+            .bind(blogId)
+            .run();
+
+        // -----------------------------------
+        // Add tags
+        // -----------------------------------
+
+        if (Array.isArray(tags)) {
+
+            for (const tagName of tags) {
+
+                if (!tagName || !tagName.trim()) {
+                    continue;
+                }
+
+                const cleanTag = tagName.trim();
+
+                let tag = await env.d1_server
+                    .prepare(`
+                        SELECT id
+                        FROM blog_tags
+                        WHERE name = ?
+                    `)
+                    .bind(cleanTag)
+                    .first();
+
+                let tagId;
+
+                if (tag) {
+
+                    tagId = tag.id;
+
+                } else {
+
+                    const tagSlug = cleanTag
+                        .toLowerCase()
+                        .trim()
+                        .replace(/[^a-z0-9]+/g, "-")
+                        .replace(/^-+|-+$/g, "");
+
+                    const tagResult = await env.d1_server
+                        .prepare(`
+                            INSERT INTO blog_tags (
+                                name,
+                                slug
+                            )
+                            VALUES (?, ?)
+                        `)
+                        .bind(
+                            cleanTag,
+                            tagSlug
+                        )
+                        .run();
+
+                    tagId = tagResult.meta.last_row_id;
+                }
+
+                await env.d1_server
+                    .prepare(`
+                        INSERT OR IGNORE INTO blog_tag_relations (
+                            blog_id,
+                            tag_id
+                        )
+                        VALUES (?, ?)
+                    `)
+                    .bind(
+                        blogId,
+                        tagId
+                    )
+                    .run();
+            }
+        }
+
+        return Response.json(
+            {
+                success: true,
+                message: "Blog updated successfully",
+                blogId
+            },
+            {
+                headers: corsHeaders
+            }
+        );
+
+    } catch (err) {
+
+        console.error("Update blog error:", err);
+
+        return Response.json(
+            {
+                success: false,
+                error: err.message
+            },
+            {
+                status: 500,
+                headers: corsHeaders
+            }
+        );
+    }
+}
+
+
+if (
+    request.method === "DELETE" &&
+    url.pathname.startsWith("/api/admin/blogs/")
+) {
+    try {
+
+        const blogId = url.pathname.split("/").pop();
+
+        if (!blogId) {
+            return Response.json(
+                {
+                    success: false,
+                    message: "Blog ID is required"
+                },
+                {
+                    status: 400,
+                    headers: corsHeaders
+                }
+            );
+        }
+
+        // Check blog exists
+        const blog = await env.d1_server
+            .prepare(`
+                SELECT id
+                FROM blogs
+                WHERE id = ?
+            `)
+            .bind(blogId)
+            .first();
+
+        if (!blog) {
+            return Response.json(
+                {
+                    success: false,
+                    message: "Blog not found"
+                },
+                {
+                    status: 404,
+                    headers: corsHeaders
+                }
+            );
+        }
+
+        // Delete blog
+        await env.d1_server
+            .prepare(`
+                DELETE FROM blogs
+                WHERE id = ?
+            `)
+            .bind(blogId)
+            .run();
+
+        return Response.json(
+            {
+                success: true,
+                message: "Blog deleted successfully"
+            },
+            {
+                headers: corsHeaders
+            }
+        );
+
+    } catch (err) {
+
+        console.error("Delete blog error:", err);
+
+        return Response.json(
+            {
+                success: false,
+                error: err.message
+            },
+            {
+                status: 500,
+                headers: corsHeaders
+            }
+        );
+    }
+}
+
+
+
+
+
+
+
+
+
+
+
 		return new Response('Not Found', { status: 404, headers: corsHeaders });
 	},
 };
