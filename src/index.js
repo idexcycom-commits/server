@@ -1815,73 +1815,78 @@ if (
         // Insert tags
         // -----------------------------------
 
-        if (Array.isArray(tags)) {
+      // -----------------------------------
+// Insert tags
+// -----------------------------------
 
-            for (const tagName of tags) {
+if (Array.isArray(tags)) {
 
-                if (!tagName || !tagName.trim()) {
-                    continue;
-                }
+    for (const tagName of tags) {
 
-                const cleanTag = tagName.trim();
-
-                // Create tag if it doesn't exist
-                let tag = await env.d1_server
-                    .prepare(`
-                        SELECT id
-                        FROM blog_tags
-                        WHERE name = ?
-                    `)
-                    .bind(cleanTag)
-                    .first();
-
-                let tagId;
-
-                if (tag) {
-
-                    tagId = tag.id;
-
-                } else {
-
-                    const tagSlug = cleanTag
-                        .toLowerCase()
-                        .trim()
-                        .replace(/[^a-z0-9]+/g, "-")
-                        .replace(/^-+|-+$/g, "");
-
-                    const tagResult = await env.d1_server
-                        .prepare(`
-                            INSERT INTO blog_tags (
-                                name,
-                                slug
-                            )
-                            VALUES (?, ?)
-                        `)
-                        .bind(
-                            cleanTag,
-                            tagSlug
-                        )
-                        .run();
-
-                    tagId = tagResult.meta.last_row_id;
-                }
-
-                // Connect tag to blog
-                await env.d1_server
-                    .prepare(`
-                        INSERT OR IGNORE INTO blog_tag_relations (
-                            blog_id,
-                            tag_id
-                        )
-                        VALUES (?, ?)
-                    `)
-                    .bind(
-                        blogId,
-                        tagId
-                    )
-                    .run();
-            }
+        if (!tagName || !tagName.trim()) {
+            continue;
         }
+
+        const cleanTag = tagName.trim();
+
+        const tagSlug = cleanTag
+            .toLowerCase()
+            .trim()
+            .replace(/[^a-z0-9]+/g, "-")
+            .replace(/^-+|-+$/g, "");
+
+        if (!tagSlug) {
+            continue;
+        }
+
+        // Create tag if it does not already exist.
+        // If the slug already exists, INSERT OR IGNORE prevents
+        // the UNIQUE constraint error.
+        await env.d1_server
+            .prepare(`
+                INSERT OR IGNORE INTO blog_tags (
+                    name,
+                    slug
+                )
+                VALUES (?, ?)
+            `)
+            .bind(
+                cleanTag,
+                tagSlug
+            )
+            .run();
+
+        // Always get the tag ID by its unique slug.
+        const tag = await env.d1_server
+            .prepare(`
+                SELECT id
+                FROM blog_tags
+                WHERE slug = ?
+                LIMIT 1
+            `)
+            .bind(tagSlug)
+            .first();
+
+        if (!tag) {
+            throw new Error(`Unable to create or find blog tag: ${cleanTag}`);
+        }
+
+        // Connect tag to blog
+        await env.d1_server
+            .prepare(`
+                INSERT OR IGNORE INTO blog_tag_relations (
+                    blog_id,
+                    tag_id
+                )
+                VALUES (?, ?)
+            `)
+            .bind(
+                blogId,
+                tag.id
+            )
+            .run();
+    }
+}
 
         return Response.json(
             {
@@ -1911,139 +1916,7 @@ if (
     }
 }
 
-if (
-    request.method === "GET" &&
-    url.pathname.startsWith("/api/admin/blogs/")
-) {
-    try {
 
-        const blogId = url.pathname.split("/").pop();
-
-        if (!blogId) {
-            return Response.json(
-                {
-                    success: false,
-                    message: "Blog ID is required"
-                },
-                {
-                    status: 400,
-                    headers: corsHeaders
-                }
-            );
-        }
-
-        // -----------------------------------
-        // Get blog
-        // -----------------------------------
-
-        const blog = await env.d1_server
-            .prepare(`
-                SELECT *
-                FROM blogs
-                WHERE id = ?
-            `)
-            .bind(blogId)
-            .first();
-
-        if (!blog) {
-            return Response.json(
-                {
-                    success: false,
-                    message: "Blog not found"
-                },
-                {
-                    status: 404,
-                    headers: corsHeaders
-                }
-            );
-        }
-
-        // -----------------------------------
-        // Get sections
-        // -----------------------------------
-
-        const sections = await env.d1_server
-            .prepare(`
-                SELECT
-                    id,
-                    heading,
-                    content,
-                    section_order
-                FROM blog_sections
-                WHERE blog_id = ?
-                ORDER BY section_order ASC
-            `)
-            .bind(blogId)
-            .all();
-
-        // -----------------------------------
-        // Get images
-        // -----------------------------------
-
-        const images = await env.d1_server
-            .prepare(`
-                SELECT
-                    id,
-                    image_url,
-                    alt_text,
-                    image_order
-                FROM blog_images
-                WHERE blog_id = ?
-                ORDER BY image_order ASC
-            `)
-            .bind(blogId)
-            .all();
-
-        // -----------------------------------
-        // Get tags
-        // -----------------------------------
-
-        const tags = await env.d1_server
-            .prepare(`
-                SELECT
-                    bt.id,
-                    bt.name,
-                    bt.slug
-                FROM blog_tags bt
-                JOIN blog_tag_relations btr
-                    ON bt.id = btr.tag_id
-                WHERE btr.blog_id = ?
-                ORDER BY bt.name ASC
-            `)
-            .bind(blogId)
-            .all();
-
-        return Response.json(
-            {
-                success: true,
-                blog: {
-                    ...blog,
-                    sections: sections.results,
-                    images: images.results,
-                    tags: tags.results
-                }
-            },
-            {
-                headers: corsHeaders
-            }
-        );
-
-    } catch (err) {
-
-        console.error("Get blog error:", err);
-
-        return Response.json(
-            {
-                success: false,
-                error: err.message
-            },
-            {
-                status: 500,
-                headers: corsHeaders
-            }
-        );
-    }
-}
 
 if (
     request.method === "PUT" &&
@@ -2285,71 +2158,76 @@ if (
         // Add tags
         // -----------------------------------
 
-        if (Array.isArray(tags)) {
+       // -----------------------------------
+// Add tags
+// -----------------------------------
 
-            for (const tagName of tags) {
+if (Array.isArray(tags)) {
 
-                if (!tagName || !tagName.trim()) {
-                    continue;
-                }
+    for (const tagName of tags) {
 
-                const cleanTag = tagName.trim();
-
-                let tag = await env.d1_server
-                    .prepare(`
-                        SELECT id
-                        FROM blog_tags
-                        WHERE name = ?
-                    `)
-                    .bind(cleanTag)
-                    .first();
-
-                let tagId;
-
-                if (tag) {
-
-                    tagId = tag.id;
-
-                } else {
-
-                    const tagSlug = cleanTag
-                        .toLowerCase()
-                        .trim()
-                        .replace(/[^a-z0-9]+/g, "-")
-                        .replace(/^-+|-+$/g, "");
-
-                    const tagResult = await env.d1_server
-                        .prepare(`
-                            INSERT INTO blog_tags (
-                                name,
-                                slug
-                            )
-                            VALUES (?, ?)
-                        `)
-                        .bind(
-                            cleanTag,
-                            tagSlug
-                        )
-                        .run();
-
-                    tagId = tagResult.meta.last_row_id;
-                }
-
-                await env.d1_server
-                    .prepare(`
-                        INSERT OR IGNORE INTO blog_tag_relations (
-                            blog_id,
-                            tag_id
-                        )
-                        VALUES (?, ?)
-                    `)
-                    .bind(
-                        blogId,
-                        tagId
-                    )
-                    .run();
-            }
+        if (!tagName || !tagName.trim()) {
+            continue;
         }
+
+        const cleanTag = tagName.trim();
+
+        const tagSlug = cleanTag
+            .toLowerCase()
+            .trim()
+            .replace(/[^a-z0-9]+/g, "-")
+            .replace(/^-+|-+$/g, "");
+
+        if (!tagSlug) {
+            continue;
+        }
+
+        // Create the tag only if this slug does not already exist.
+        await env.d1_server
+            .prepare(`
+                INSERT OR IGNORE INTO blog_tags (
+                    name,
+                    slug
+                )
+                VALUES (?, ?)
+            `)
+            .bind(
+                cleanTag,
+                tagSlug
+            )
+            .run();
+
+        // Get the existing/new tag using the UNIQUE slug.
+        const tag = await env.d1_server
+            .prepare(`
+                SELECT id
+                FROM blog_tags
+                WHERE slug = ?
+                LIMIT 1
+            `)
+            .bind(tagSlug)
+            .first();
+
+        if (!tag) {
+            throw new Error(`Unable to create or find blog tag: ${cleanTag}`);
+        }
+
+        // Connect tag to blog
+        await env.d1_server
+            .prepare(`
+                INSERT OR IGNORE INTO blog_tag_relations (
+                    blog_id,
+                    tag_id
+                )
+                VALUES (?, ?)
+            `)
+            .bind(
+                blogId,
+                tag.id
+            )
+            .run();
+    }
+}
 
         return Response.json(
             {
@@ -2378,6 +2256,8 @@ if (
         );
     }
 }
+
+
 
 
 if (
