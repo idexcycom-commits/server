@@ -2340,7 +2340,139 @@ if (
     }
 }
 
+if (
+    request.method === "GET" &&
+    url.pathname.startsWith("/api/admin/blogs/")
+) {
+    try {
 
+        const blogId = url.pathname.split("/").pop();
+
+        if (!blogId) {
+            return Response.json(
+                {
+                    success: false,
+                    message: "Blog ID is required"
+                },
+                {
+                    status: 400,
+                    headers: corsHeaders
+                }
+            );
+        }
+
+        // -----------------------------------
+        // Get blog
+        // -----------------------------------
+
+        const blog = await env.d1_server
+            .prepare(`
+                SELECT *
+                FROM blogs
+                WHERE id = ?
+            `)
+            .bind(blogId)
+            .first();
+
+        if (!blog) {
+            return Response.json(
+                {
+                    success: false,
+                    message: "Blog not found"
+                },
+                {
+                    status: 404,
+                    headers: corsHeaders
+                }
+            );
+        }
+
+        // -----------------------------------
+        // Get sections
+        // -----------------------------------
+
+        const sections = await env.d1_server
+            .prepare(`
+                SELECT
+                    id,
+                    heading,
+                    content,
+                    section_order
+                FROM blog_sections
+                WHERE blog_id = ?
+                ORDER BY section_order ASC
+            `)
+            .bind(blogId)
+            .all();
+
+        // -----------------------------------
+        // Get images
+        // -----------------------------------
+
+        const images = await env.d1_server
+            .prepare(`
+                SELECT
+                    id,
+                    image_url,
+                    alt_text,
+                    image_order
+                FROM blog_images
+                WHERE blog_id = ?
+                ORDER BY image_order ASC
+            `)
+            .bind(blogId)
+            .all();
+
+        // -----------------------------------
+        // Get tags
+        // -----------------------------------
+
+        const tags = await env.d1_server
+            .prepare(`
+                SELECT
+                    bt.id,
+                    bt.name,
+                    bt.slug
+                FROM blog_tags bt
+                JOIN blog_tag_relations btr
+                    ON bt.id = btr.tag_id
+                WHERE btr.blog_id = ?
+                ORDER BY bt.name ASC
+            `)
+            .bind(blogId)
+            .all();
+
+        return Response.json(
+            {
+                success: true,
+                blog: {
+                    ...blog,
+                    sections: sections.results,
+                    images: images.results,
+                    tags: tags.results
+                }
+            },
+            {
+                headers: corsHeaders
+            }
+        );
+
+    } catch (err) {
+
+        console.error("Get blog error:", err);
+
+        return Response.json(
+            {
+                success: false,
+                error: err.message
+            },
+            {
+                status: 500,
+                headers: corsHeaders
+            }
+        );
+    }
+}
 
 
 
