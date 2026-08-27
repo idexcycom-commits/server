@@ -167,3 +167,6 @@ dist
 .wrangler/
 
 .screet.txt
+src/screet.txt
+.env
+.env.*
