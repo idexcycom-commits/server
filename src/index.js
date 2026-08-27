@@ -6,19 +6,7 @@ import { handleProducts } from "./routes/products.js";
 import { handleUsers } from "./routes/users.js";
 
 // inside fetch()
-const handlers = [
-    handlePublicBlogs,
-    handleAdminBlogs,
-    handleAuth,
-    handleOrders,
-    handleProducts,
-    handleUsers,
-];
 
-for (const handler of handlers) {
-    const response = await handler(request, env, url, corsHeaders);
-    if (response) return response;
-}
 
 // remaining endpoints...
 const corsHeaders = {
@@ -124,20 +112,47 @@ export async function verifyEmail(request, env) {
 		);
 	}
 }
+
+const corsHeaders = {
+    "Access-Control-Allow-Origin": "https://idexcy.com",
+    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+};
+
+
+      
 export default {
 	async fetch(request, env) {
-		if (request.method === 'OPTIONS') {
-			return new Response(null, {
-				status: 204,
-				headers: corsHeaders,
-			});
-		}
+		  if (request.method === "OPTIONS") {
+            return new Response(null, {
+                status: 204,
+                headers: corsHeaders,
+            });
+        }
 
-		const url = new URL(request.url);
+        const url = new URL(request.url);
 
-		const publicBlogResponse = await handlePublicBlogs(request, env, url, corsHeaders);
-		if (publicBlogResponse) return publicBlogResponse;
+        const handlers = [
+            handlePublicBlogs,
+            handleAdminBlogs,
+            handleAuth,
+            handleOrders,
+            handleProducts,
+            handleUsers,
+        ];
 
+        for (const handler of handlers) {
+            const response = await handler(
+                request,
+                env,
+                url,
+                corsHeaders
+            );
+
+            if (response) return response;
+        }
+
+		
 		if (url.pathname === '/api/verify-email' && request.method === 'POST') {
 			return verifyEmail(request, env);
 		}
