@@ -5,10 +5,7 @@ import { handleOrders } from "./routes/orders.js";
 import { handleProducts } from "./routes/products.js";
 import { handleUsers } from "./routes/users.js";
 
-// inside fetch()
 
-
-// remaining endpoints...
 const corsHeaders = {
 	'Access-Control-Allow-Origin': 'https://idexcy.com',
 	'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
@@ -113,11 +110,6 @@ export async function verifyEmail(request, env) {
 	}
 }
 
-const corsHeaders = {
-    "Access-Control-Allow-Origin": "https://idexcy.com",
-    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization",
-};
 
 
       
